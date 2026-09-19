@@ -18,7 +18,10 @@
 -- (их проставляет tools/genmanifest.py). Установщик сверяет их со своими
 -- файлами и качает только то, что отличается или чего нет. Скачанное
 -- ложится сначала в .part и заменяет старый файл, только если размер и
--- хэш сошлись, - оборванная загрузка рабочую игру не портит. Файлы и
+-- хэш сошлись, - оборванная загрузка рабочую игру не портит. Качается не
+-- по имени ветки, а по хэшу коммита (ветка превращается в него запросом к
+-- api.github.com): raw.githubusercontent держит ветку в кэше до пяти минут
+-- и сразу после публикации отдал бы старый манифест. Файлы и
 -- ярлыки, которые ставил он сам, а в манифесте их больше нет, удаляются;
 -- чужое в каталоге не трогается. Что и с каким хэшем стоит, записано в
 -- <каталог>/.installed - по нему же видно, что пересчитывать 1.3 МБ
@@ -172,10 +175,30 @@ local SUB    = DIR ~= "" and (DIR:gsub("/+$", "") .. "/") or ""
 if not component.isAvailable("internet") then die("нужна интернет-карта") end
 local internet = require("internet")
 
+-- raw.githubusercontent.com держит файлы в кэше до пяти минут (max-age=300):
+-- сразу после публикации по имени ветки может прийти старый манифест, и
+-- обновление скажет "всё свежее". Адрес с хэшем коммита кэш устаревшим не
+-- отдаст, поэтому ветка сначала превращается в хэш. Не вышло (лимит API,
+-- нет сети до api.github.com) - качаем по имени ветки, как раньше.
+-- Так же устроен update в самой DwOS.
+local REF = BRANCH
+do
+	local ok, h = pcall(internet.request,
+		("https://api.github.com/repos/%s/commits/%s"):format(REPO, BRANCH), nil,
+		{ ["user-agent"] = "ocgames", ["accept"] = "application/vnd.github.sha" })
+	if ok and h then
+		local body = {}
+		pcall(function() for chunk in h do body[#body + 1] = chunk end end)
+		pcall(h.close)
+		local sha = table.concat(body):match("^%s*(%x+)%s*$")
+		if sha and #sha == 40 then REF = sha end
+	end
+end
+
 --- Открыть поток и дождаться кода ответа. 404 отличаем от обрыва связи:
 --- необязательные файлы (ролик к badapple) на него не жалуются.
 local function open(path)
-	local url = ("https://raw.githubusercontent.com/%s/%s/%s%s"):format(REPO, BRANCH, SUB, path)
+	local url = ("https://raw.githubusercontent.com/%s/%s/%s%s"):format(REPO, REF, SUB, path)
 	local ok, h = pcall(internet.request, url, nil, { ["user-agent"] = "ocgames" })
 	if not ok then return nil, tostring(h) end
 	local code
@@ -256,7 +279,9 @@ end
 
 -- Манифест ------------------------------------------------------------------
 
-print(("Игры: %s@%s%s"):format(REPO, BRANCH, SUB ~= "" and (" /" .. SUB) or ""))
+print(("Игры: %s@%s%s%s"):format(REPO, BRANCH,
+	REF ~= BRANCH and (" (" .. REF:sub(1, 7) .. ")") or "",
+	SUB ~= "" and (" /" .. SUB) or ""))
 
 local src, why = fetch("manifest.lua")
 if not src then die("manifest.lua: " .. tostring(why)) end
