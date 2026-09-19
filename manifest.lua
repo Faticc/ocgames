@@ -7,7 +7,7 @@
 		{ "marioart.lua",    "marioart.lua",   size = 20698, crc = "f9b0dd55" },
 		{ "mario.lua",       "mario.lua",      size = 59896, crc = "3d502d0c" },
 		{ "doomart.lua",     "doomart.lua",    size = 19005, crc = "2bb478d8" },
-		{ "doom.lua",        "doom.lua",       size = 58100, crc = "7cb00377" },
+		{ "doom.lua",        "doom.lua",       size = 62023, crc = "beffbf61" },
 		{ "chip8roms.lua",   "chip8roms.lua",  size = 966, crc = "074b0279" },
 		{ "chip8.lua",       "chip8.lua",      size = 13288, crc = "0440f395" },
 		{ "casino.lua",      "casino.lua",     size = 55344, crc = "28e60c50" },

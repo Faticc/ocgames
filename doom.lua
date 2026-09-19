@@ -45,7 +45,10 @@ local function memUsed()
 	return (computer.totalMemory() - computer.freeMemory()) / 1024
 end
 local MEM0 = memUsed()
-local event = require("event")
+-- lib/event нужен не сам по себе, а тем, что при загрузке ставит свой
+-- computer.pullSignal: в нём и Ctrl+Alt+C, и таймеры системы. Очередь
+-- игра разбирает уже через него, а не через event.pull.
+require("event")
 local unicode = require("unicode")
 local gpu = component.gpu
 
@@ -819,14 +822,18 @@ end
 
 ------------------------------------------------------------------ игрок
 
-local keys = {}
+-- Ходьба на WASD, поворот стрелками, огонь пробелом: мыши в машине нет,
+-- поэтому поворот - такая же клавиша, как остальные, и держать его удобнее
+-- другой рукой, чем той, что ходит.
+local keys = {}    -- код -> номер кадра, в котором пришло key_down
+local tap = {}     -- код -> нажали и отпустили, не дожив до шага
 local K = {
-	forward = { 200, 17 },        -- стрелка вверх, W
-	back    = { 208, 31 },        -- стрелка вниз, S
-	turnL   = { 203 },            -- стрелка влево
-	turnR   = { 205 },            -- стрелка вправо
+	forward = { 17 },             -- W
+	back    = { 31 },             -- S
 	strafeL = { 30 },             -- A
 	strafeR = { 32 },             -- D
+	turnL   = { 203 },            -- стрелка влево
+	turnR   = { 205 },            -- стрелка вправо
 	run     = { 42, 54 },         -- shift
 	fire    = { 57, 29, 157 },    -- пробел, ctrl
 	use     = { 18, 28 },         -- E, enter
@@ -834,11 +841,17 @@ local K = {
 	quit    = { 16, 1 },          -- Q, esc
 }
 
+--- Зажата ли клавиша. Касание, не дожившее до шага, считается зажатой
+--- клавишей ровно один кадр: при двадцати кадрах в секунду короткий тычок
+--- по огню иначе пропадал бы целиком.
 local function down(name)
-	for _, c in ipairs(K[name]) do if keys[c] then return true end end
+	for _, c in ipairs(K[name]) do if keys[c] or tap[c] then return true end end
 	return false
 end
 
+-- Длиннее этого шаг физики не берётся: кадр в OC плавает, а разбег и
+-- полёт шаров складываются по шагам.
+local SUBSTEP = 0.06
 local WALK, RUNSPD = 2.6, 4.4
 local TURN, TURNRUN = 2.4, 3.4
 
@@ -1362,17 +1375,34 @@ end
 
 local running = true
 
---- Обработчик клавиш висит на event.listen, а не разбирает то, что вернул
---- event.pull: OpenOS с нулевым таймаутом сигналы не отдаёт, и игра на
---- этом оставалась бы глухой. Возвращать false нельзя - OpenOS снял бы
---- обработчик.
-local function handleKey(name, _, ch, code)
+-- Ввод. Клавиатура приходит сигналами, и очередь у машины одна на всё; за
+-- одно пробуждение мод отдаёт ровно один сигнал. Разбирая по событию за
+-- кадр, игра отставала всё сильнее, пока клавишу держат: мод шлёт key_down
+-- снова и снова, чаще, чем идут кадры, - и key_up приходило с опозданием в
+-- секунды. Прежний "добор" не помогал: он звал event.pull(0), а тот при
+-- нулевом ожидании выходит, не спросив очередь.
+--
+-- Теперь очередь разбирается напрямую computer.pullSignal, и за кадр
+-- добирается столько, сколько успевается до нового тика. Повтор от мода
+-- отличается от нового нажатия тем, что клавиша уже помечена зажатой: на
+-- зажатом E дверь больше не дёргается без конца, а Tab не мигает картой.
+-- Нажатие и отпускание, попавшие в один кадр, раньше гасили друг друга -
+-- теперь такое касание живёт ровно один кадр.
+
+local pullSignal = computer.pullSignal
+local DRAIN = 64          -- событий за кадр самое большее, страховка от потопа
+local frame = 0           -- номер кадра: им метятся нажатия
+
+--- Разобрать один сигнал. Возвращает false, когда игру пора закрывать.
+local function handleSignal(e, _, _, code)
+	if e == "interrupted" then return false end
 	if type(code) ~= "number" then return true end
-	G.keyEvents = (G.keyEvents or 0) + 1
-	G.lastKey = ("%s %s"):format(name == "key_down" and "вниз" or "вверх", tostring(code))
-	if name == "key_down" then
-		keys[code] = true
-		for _, q in ipairs(K.quit) do if code == q then running = false end end
+	if e == "key_down" then
+		if opt.keys then G.lastKey = "вниз " .. tostring(code) end
+		-- повтор от мода, а не новое нажатие: клавиша уже зажата
+		if keys[code] then keys[code] = frame return true end
+		keys[code] = frame
+		for _, q in ipairs(K.quit) do if code == q then return false end end
 		if G.state == "play" then
 			if code == 2 then switchWeapon(1) end
 			if code == 3 then switchWeapon(2) end
@@ -1390,33 +1420,36 @@ local function handleKey(name, _, ch, code)
 		elseif G.state ~= "play" then
 			G.advance = true
 		end
-	elseif name == "key_up" then
+	elseif e == "key_up" then
+		if opt.keys then G.lastKey = "вверх " .. tostring(code) end
+		if keys[code] == frame then tap[code] = true end
 		keys[code] = nil
 	end
 	return true
 end
 
-event.listen("key_down", handleKey)
-event.listen("key_up", handleKey)
-
---- Отдать управление системе: за это время OpenOS разберёт очередь
---- сигналов и вызовет handleKey. Таймаут обязательно ненулевой.
+--- Разобрать очередь и дождаться нового тика.
+---
+--- Часы машины идут тиками по 0.05 с, а просыпается она чаще: мод будит
+--- её каждые executionDelay миллисекунд, пока есть чем заняться. Вернись
+--- отсюда раньше, чем часы сдвинулись, - и у кадра выйдет нулевое dt, а
+--- физике придётся выдумать время: игра пойдёт быстрее настоящей. Плавнее
+--- она от лишних кадров не станет - экран обновляется раз в тик, - зато
+--- бюджет вызовов они съедят.
+---
+--- Поэтому кадр здесь один на тик, а промежуток не пропадает: пока тик не
+--- начался, из очереди выбирается ввод, и к самому кадру он разобран весь.
 local function pump(timeout)
-	local before = G.keyEvents or 0
-	local e, addr, ch, code = event.pull(timeout or 0.02)
-	if e == "interrupted" then running = false return end
-	if (e == "key_down" or e == "key_up") and (G.keyEvents or 0) == before then
-		handleKey(e, addr, ch, code)
-	end
 	local t0 = computer.uptime()
-	for _ = 1, 8 do
-		before = G.keyEvents or 0
-		e, addr, ch, code = event.pull(0)
-		if not e then break end
-		if (e == "key_down" or e == "key_up") and (G.keyEvents or 0) == before then
-			handleKey(e, addr, ch, code)
-		elseif e == "interrupted" then running = false break end
-		if computer.uptime() - t0 > 0.008 then break end
+	local n = 0
+	while running do
+		local e, addr, ch, code = pullSignal(n == 0 and (timeout or 0) or 0)
+		if e then
+			if not handleSignal(e, addr, ch, code) then running = false break end
+			n = n + 1
+			if n >= DRAIN then break end
+		end
+		if computer.uptime() > t0 then break end
 	end
 end
 
@@ -1447,7 +1480,10 @@ local ok, err = pcall(function()
 	local frames, fpsT = 0, 0
 
 	while running do
-		pump()
+		frame = frame + 1
+		-- касания прошлого кадра своё отработали
+		for c in pairs(tap) do tap[c] = nil end
+		pump(0)
 		local now = computer.uptime()
 		local dt = now - last
 		last = now
@@ -1459,7 +1495,8 @@ local ok, err = pcall(function()
 				G.drawn = true
 				local lines = { "D O O M", "", "OpenComputers edition", "",
 				                "~любая клавиша - вниз, в ад",
-				                "стрелки - идти и поворачивать, A/D - вбок",
+				                "W/S - вперёд и назад, A/D - вбок",
+				                "стрелки влево-вправо - поворот",
 				                "пробел - огонь, E - открыть, Tab - карта",
 				                "1/2/3 - оружие, shift - бегом, Q - выход" }
 				if not scr.buf then
@@ -1516,9 +1553,16 @@ local ok, err = pcall(function()
 			pump(0.2)
 		else
 			local tl = opt.prof and clock() or 0
-			stepPlayer(dt)
-			stepEnts(dt)
-			stepDoors(dt)
+			-- Длинный кадр считается не одним шагом, а несколькими: на
+			-- просевшем кадре иначе и разбег другой, и шар успевает
+			-- проскочить стену. Обычный кадр укладывается в один шаг.
+			local n = math.ceil(dt / SUBSTEP)
+			local sd = dt / n
+			for _ = 1, n do
+				stepPlayer(sd)
+				stepEnts(sd)
+				stepDoors(sd)
+			end
 			L.time = L.time + dt
 			if G.msgT > 0 then
 				G.msgT = G.msgT - dt
@@ -1552,8 +1596,6 @@ local ok, err = pcall(function()
 	end
 end)
 
-event.ignore("key_down", handleKey)
-event.ignore("key_up", handleKey)
 scr:close()
 gpu.setActiveBuffer(0)
 gpu.setResolution(gpu.maxResolution())
