@@ -11,6 +11,8 @@
 		{ "chip8roms.lua",   "chip8roms.lua",  size = 966, crc = "074b0279" },
 		{ "chip8.lua",       "chip8.lua",      size = 13288, crc = "0440f395" },
 		{ "casino.lua",      "casino.lua",     size = 55344, crc = "28e60c50" },
+		{ "kartart.lua",     "kartart.lua",    size = 21440, crc = "e4300472" },
+		{ "kart.lua",        "kart.lua",       size = 71757, crc = "b302902b" },
 		{ "keytest.lua",     "keytest.lua",    size = 1924, crc = "814b00b7" },
 		-- сам установщик: им же и обновляются (games-update)
 		{ "install.lua",     "install.lua",    size = 18734, crc = "8fe7197f" },
@@ -26,6 +28,7 @@
 		{ "chip8", "chip8.lua" },
 		{ "badapple", "badapple.lua" },
 		{ "casino", "casino.lua" },
+		{ "kart", "kart.lua" },
 		{ "games-update", "install.lua" },
 	},
 }
