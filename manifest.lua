@@ -5,7 +5,7 @@
 	dir = "/home/games",
 	files = {
 		{ "marioart.lua",    "marioart.lua",   size = 20698, crc = "f9b0dd55" },
-		{ "mario.lua",       "mario.lua",      size = 58997, crc = "830a227a" },
+		{ "mario.lua",       "mario.lua",      size = 59896, crc = "3d502d0c" },
 		{ "doomart.lua",     "doomart.lua",    size = 19005, crc = "2bb478d8" },
 		{ "doom.lua",        "doom.lua",       size = 58100, crc = "7cb00377" },
 		{ "chip8roms.lua",   "chip8roms.lua",  size = 966, crc = "074b0279" },
