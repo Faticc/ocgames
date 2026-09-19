@@ -35,7 +35,10 @@ end
 
 local component = require("component")
 local computer = require("computer")
-local event = require("event")
+-- lib/event нужен не сам по себе, а тем, что при загрузке ставит свой
+-- computer.pullSignal: в нём и Ctrl+Alt+C, и таймеры системы. Очередь
+-- игра разбирает уже через него, а не через event.pull.
+require("event")
 local unicode = require("unicode")
 local gpu = component.gpu
 
@@ -86,6 +89,10 @@ local GRAV, GRAV_HOLD, MAXFALL = 820, 380, 340
 local JUMP = -238
 -- под водой Марио всплывает толчками, а не прыгает
 local SWIM_GRAV, SWIM_MAX, SWIM_UP, SWIM_WALK = 130, 62, -78, 52
+-- Длиннее этого шаг физики не берётся: кадр в OC плавает, а тяжесть и
+-- разгон складываются по шагам, и на длинном кадре прыжок вышел бы
+-- другим. Обычный кадр укладывается в один шаг.
+local SUBSTEP = 0.06
 local ENEMY_SPD = 28
 local SHELL_SPD = 150
 local FIRE_SPD = 150
@@ -468,6 +475,8 @@ local function resetMario(full)
 	M.dead, M.deadT = false, 0
 	M.win, M.winT, M.castleWin = false, 0, false
 	M.duck = false
+	-- поблажки прыжка: без них первый же шаг физики сравнивал бы nil
+	M.jumpBuf, M.coyote, M.jumpHeld = 0, 0, false
 	local s = G.level.start
 	M.x = (s[1] - 1) * TW
 	M.y = (s[2] - 1) * TW
@@ -509,7 +518,8 @@ end
 
 ------------------------------------------------------------------ ввод
 
-local keys = {}
+local keys = {}    -- код -> номер кадра, в котором пришло key_down
+local tap = {}     -- код -> нажали и отпустили, не дожив до шага физики
 local K = {
 	left  = { 203, 30 },            -- стрелка влево, A
 	right = { 205, 32 },            -- стрелка вправо, D
@@ -519,8 +529,16 @@ local K = {
 	quit  = { 16, 1 },              -- Q, Esc
 }
 
+-- Прыжок, нажатый чуть раньше приземления, запоминается на JUMP_BUF, а
+-- земля под ногами держится ещё COYOTE после схода с края. При двадцати
+-- кадрах в секунду без этих поблажек половина прыжков пропадает: игрок
+-- жмёт вовремя, а кадр, в котором Марио коснулся земли, уже прошёл.
+local JUMP_BUF, COYOTE = 0.15, 0.1
+
+--- Зажата ли клавиша. Касание, не дожившее до шага физики, считается
+--- зажатой клавишей ровно один кадр.
 local function down(name)
-	for _, c in ipairs(K[name]) do if keys[c] then return true end end
+	for _, c in ipairs(K[name]) do if keys[c] or tap[c] then return true end end
 	return false
 end
 
@@ -605,17 +623,18 @@ local hudCache = {}
 local function drawHUD()
 	local L = G.level
 	-- всё, что уходит в "%d", округляем на месте: любое дробное число
-	-- здесь роняет игру, а прийти оно может из физики
-	local line = string.format("MARIO %06d   x%02d   %s   %03d",
-		math.floor(G.score), math.floor(G.lives), L.name, math.floor(G.time))
-	local cx = string.format("$%02d", math.floor(G.coins))
-	if hudCache.line ~= line then
-		scr:text(2, 1, line .. "    ", 2, 0)
-		hudCache.line = line
+	-- здесь роняет игру, а прийти оно может из физики. Сравниваем сами
+	-- числа, а не собранную строку: строка собирается редко, а мусор,
+	-- который она оставляет, каждый кадр собирал бы за собой сборщик
+	local sc, lv, tm = math.floor(G.score), math.floor(G.lives), math.floor(G.time)
+	if hudCache.sc ~= sc or hudCache.lv ~= lv or hudCache.tm ~= tm or hudCache.nm ~= L.name then
+		hudCache.sc, hudCache.lv, hudCache.tm, hudCache.nm = sc, lv, tm, L.name
+		scr:text(2, 1, string.format("MARIO %06d   x%02d   %s   %03d    ", sc, lv, L.name, tm), 2, 0)
 	end
-	if hudCache.cx ~= cx then
-		scr:text(scr.w - 6, 1, cx, 6, 0)
-		hudCache.cx = cx
+	local cn = math.floor(G.coins)
+	if hudCache.cn ~= cn then
+		hudCache.cn = cn
+		scr:text(scr.w - 6, 1, string.format("$%02d", cn), 6, 0)
 	end
 	-- с --keys видно прямо в игре, доходят ли нажатия до машины
 	if opt.keys and hudCache.key ~= G.lastKey then
@@ -1040,18 +1059,21 @@ local function stepMario(dt)
 		if math.abs(M.vx) <= d then M.vx = 0 else M.vx = M.vx - (M.vx > 0 and d or -d) end
 	end
 
-	-- прыжок: пока держишь кнопку и летишь вверх, тянет слабее
-	if down("up") then
-		if M.ground and not M.jumpHeld then
-			M.vy = JUMP - math.abs(M.vx) * 0.12
-			M.ground = false
-			trace("прыжок с y=%.0f", M.y)
-			beep(520, 0.04)
-		end
-		M.jumpHeld = true
-	else
-		M.jumpHeld = false
+	-- Прыжок. Нажатие живёт JUMP_BUF секунды, а земля под ногами - ещё
+	-- COYOTE после схода с края: тогда прыжок, нажатый чуть раньше
+	-- приземления или чуть позже обрыва, всё равно случается. Повторное
+	-- нажатие берётся только с новой клавиши, поэтому зажатая кнопка не
+	-- заставляет Марио скакать. Пока её держат и он летит вверх, тянет
+	-- слабее - отсюда высота по длине нажатия.
+	M.jumpBuf = M.jumpBuf > 0 and M.jumpBuf - dt or 0
+	M.coyote = M.ground and COYOTE or (M.coyote > 0 and M.coyote - dt or 0)
+	if M.jumpBuf > 0 and M.coyote > 0 and not G.water then
+		M.vy = JUMP - math.abs(M.vx) * 0.12
+		M.ground, M.coyote, M.jumpBuf = false, 0, 0
+		trace("прыжок с y=%.0f", M.y)
+		beep(520, 0.04)
 	end
+	M.jumpHeld = down("up")
 	local g = (M.jumpHeld and M.vy < 0) and GRAV_HOLD or GRAV
 	M.vy = math.min(M.vy + g * dt, MAXFALL)
 	if G.water then
@@ -1060,7 +1082,7 @@ local function stepMario(dt)
 		M.vy = math.min(M.pvyRaw or M.vy, SWIM_MAX)
 		M.vy = math.min(M.vy + SWIM_GRAV * dt, SWIM_MAX)
 		M.swimAt = math.max(0, (M.swimAt or 0) - dt)
-		if (M.jumpBuf > 0 or (down("up") and not M.jumpHeld)) and M.swimAt <= 0 then
+		if M.jumpBuf > 0 and M.swimAt <= 0 then
 			M.vy = SWIM_UP
 			M.swimAt = 0.28
 			M.jumpBuf = 0
@@ -1236,18 +1258,48 @@ end
 
 local running = true
 
---- Обработчик клавиш. Висит на event.listen, а не разбирает то, что
---- вернул event.pull: OpenOS с нулевым таймаутом сигналы не отдаёт, и
---- игра на этом оставалась глухой, хотя клавиатура исправно слала
---- key_down и key_up. Подписка же срабатывает на любом ожидании.
---- Возвращать false нельзя - OpenOS снял бы обработчик.
-local function handleKey(name, _, ch, code)
-	G.keyEvents = (G.keyEvents or 0) + 1
-	G.lastKey = ("%s %s"):format(name == "key_down" and "вниз" or "вверх", tostring(code))
-	if name == "key_down" then
-		keys[code] = true
-		for _, u in ipairs(K.up) do if code == u then M.jumpBuf = 0.15 end end
-		for _, q in ipairs(K.quit) do if code == q then running = false end end
+-- Ввод. Клавиатура приходит сигналами, и очередь у машины одна на всё;
+-- за одно пробуждение мод отдаёт ровно один сигнал. Отсюда всё, из-за
+-- чего управление казалось вязким:
+--
+--  * пока клавишу держат, мод шлёт key_down снова и снова, чаще, чем идут
+--    кадры. Разбирая по событию за кадр, игра отставала всё сильнее, и
+--    key_up приходило с опозданием в секунды: Марио бежал, когда его уже
+--    отпустили, а очередь мода в конце концов переполнялась и теряла
+--    сигналы - тогда клавиша залипала совсем;
+--  * event.pull(0) очередь не спрашивает вовсе (при нулевом ожидании он
+--    выходит сразу), так что прежний "добор" не разбирал ничего;
+--  * нажатие и отпускание, попавшие в один кадр, гасили друг друга -
+--    короткий тычок по прыжку пропадал целиком.
+--
+-- Теперь очередь разбирается напрямую computer.pullSignal: он, в отличие
+-- от event.pull, отдаёт то, что уже стоит в очереди. За кадр добираем
+-- столько, сколько успеваем, пока не кончилась отведённая на это доля
+-- кадра. Повтор от мода отличается от нового нажатия тем, что клавиша уже
+-- помечена зажатой, и на прыжок с огнём не влияет.
+
+local pullSignal = computer.pullSignal
+local DRAIN = 12          -- событий за кадр самое большее
+local DRAIN_T = 0.05      -- ... и не дольше тика на весь разбор
+local HOLD_F = 24         -- кадров молчания, после которых клавиша отпущена
+
+local frame = 0           -- номер кадра: им метятся нажатия
+local sawRepeat = false   -- мод шлёт повторы key_down (зависит от системы)
+
+--- Разобрать один сигнал. Возвращает false, когда игру пора закрывать.
+local function handleSignal(e, _, _, code)
+	if e == "key_down" then
+		if opt.keys then G.lastKey = "вниз " .. tostring(code) end
+		if keys[code] then
+			-- это повтор от мода, а не новое нажатие: Марио не должен
+			-- скакать и стрелять сам, пока клавишу просто держат
+			sawRepeat = true
+			keys[code] = frame
+			return true
+		end
+		keys[code] = frame
+		for _, u in ipairs(K.up) do if code == u then M.jumpBuf = JUMP_BUF end end
+		for _, q in ipairs(K.quit) do if code == q then return false end end
 		if code == 45 or code == 44 or code == 42 or code == 54 then tryFire() end
 		-- на заставке годится любая клавиша: так сразу видно, доходит ли
 		-- до игры ввод вообще
@@ -1256,39 +1308,42 @@ local function handleKey(name, _, ch, code)
 			G.score, G.lives, G.lv = 0, 3, 1
 			G.state = "intro" G.wait = 0 G.drawn = false
 		end
-	elseif name == "key_up" then
+	elseif e == "key_up" then
+		if opt.keys then G.lastKey = "вверх " .. tostring(code) end
+		-- нажали и отпустили внутри одного кадра: касание всё равно
+		-- должно сработать, иначе при двадцати кадрах в секунду пропадает
+		-- всякий быстрый тычок
+		if keys[code] == frame then tap[code] = true end
 		keys[code] = nil
+	elseif e == "interrupted" then
+		return false
 	end
 	return true
 end
 
-event.listen("key_down", handleKey)
-event.listen("key_up", handleKey)
-
---- Отдать управление системе: за это время OpenOS разберёт очередь
---- сигналов и вызовет handleKey. Таймаут обязательно ненулевой.
+--- Разобрать очередь. Первая выборка заодно уступает машину - без этого
+--- мод не отдаст ни накопленные сигналы, ни следующий тик. Дальше
+--- добираем, пока очередь не опустеет, но считаем не попытки, а время:
+--- уступка стоит то двенадцати миллисекунд, то целого тика, и на разбор
+--- ввода кадр тратить больше тика нельзя.
 local function pump(timeout)
-	local before = G.keyEvents or 0
-	local e, addr, ch, code = event.pull(timeout or 0.02)
-	if e == "interrupted" then running = false return end
-	-- подстраховка: если подписка почему-то не сработала, разберём
-	-- событие сами. Счётчик не даёт обработать одно нажатие дважды
-	if (e == "key_down" or e == "key_up") and (G.keyEvents or 0) == before then
-		handleKey(e, addr, ch, code)
-	end
-	-- Доберём то, что уже стоит в очереди: при удержании клавиши система
-	-- шлёт повторы чаще, чем идут кадры, и отпускание иначе приходит с
-	-- опозданием. Как только выборка перестаёт быть мгновенной, бросаем -
-	-- ждать здесь дороже, чем нарисовать кадр.
 	local t0 = computer.uptime()
-	for _ = 1, 8 do
-		before = G.keyEvents or 0
-		e, addr, ch, code = event.pull(0)
+	timeout = timeout or 0
+	for i = 1, DRAIN do
+		local e, addr, ch, code = pullSignal(i == 1 and timeout or 0)
 		if not e then break end
-		if (e == "key_down" or e == "key_up") and (G.keyEvents or 0) == before then
-			handleKey(e, addr, ch, code)
-		elseif e == "interrupted" then running = false break end
-		if computer.uptime() - t0 > 0.008 then break end
+		if not handleSignal(e, addr, ch, code) then running = false break end
+		if computer.uptime() - t0 >= DRAIN_T then break end
+	end
+	-- Если key_up потерялось (очередь мода переполнилась, экран закрыли),
+	-- зажатая клавиша осталась бы зажатой навсегда, и Марио ушёл бы в
+	-- пропасть сам. Сторож на этот случай включается только там, где мод
+	-- шлёт повторы: раз они идут, значит молчание - это отпускание. Ждём
+	-- дольше задержки перед первым повтором (у системы она до секунды).
+	if sawRepeat then
+		for c, f in pairs(keys) do
+			if frame - f > HOLD_F then keys[c] = nil end
+		end
 	end
 end
 
@@ -1317,7 +1372,10 @@ local ok, err = pcall(function()
 	local frames, fpsT = 0, 0
 
 	while running do
-		pump()
+		frame = frame + 1
+		-- касания прошлого кадра своё отработали
+		for c in pairs(tap) do tap[c] = nil end
+		pump(0)
 		local now = computer.uptime()
 		local dt = now - last
 		last = now
@@ -1355,6 +1413,10 @@ local ok, err = pcall(function()
 			G.wait = G.wait + dt
 			if G.wait > 1.4 then
 				G.state = "play"
+				-- клавишу, которой уходили с заставки, засчитывать за
+				-- прыжок не надо: на заставке годится любая, в том числе
+				-- пробел, и Марио подпрыгивал бы на первом же кадре
+				M.jumpBuf, M.coyote = 0, 0
 				for i = 1, scr.w * scr.h do scr.shown[i] = -1 end
 				scr:clear(0)
 				redrawAll()
@@ -1380,7 +1442,18 @@ local ok, err = pcall(function()
 		else
 			local tl = opt.prof and clock() or 0
 			activatePending()
-			stepMario(dt)
+			-- Длинный кадр считается не одним шагом, а несколькими: тяжесть
+			-- и разгон складываются по шагам, поэтому при кадре вдвое
+			-- длиннее прыжок вышел бы заметно другим. Дробим до SUBSTEP -
+			-- обычный кадр как был одним шагом, так и остаётся, а просевший
+			-- перестаёт менять высоту прыжка и дальность разбега.
+			local n = math.ceil(dt / SUBSTEP)
+			local sd = dt / n
+			for _ = 1, n do
+				stepMario(sd)
+				stepEnemies(sd)
+				stepEffects(sd)
+			end
 			if opt.trace and (G.traceT or 0) + 1 < computer.uptime() then
 				G.traceT = computer.uptime()
 				local e = G.ents[1]
@@ -1388,8 +1461,6 @@ local ok, err = pcall(function()
 					M.x, M.y, M.vy, tostring(M.ground), #G.ents,
 					e and e.kind or "-", e and e.x or 0, e and e.y or 0, e and e.vx or 0)
 			end
-			stepEnemies(dt)
-			stepEffects(dt)
 			if opt.prof then prof.logic = prof.logic + (clock() - tl) end
 
 			G.timeAcc = G.timeAcc + dt
@@ -1424,8 +1495,6 @@ local ok, err = pcall(function()
 	end
 end)
 
-event.ignore("key_down", handleKey)
-event.ignore("key_up", handleKey)
 scr:close()
 gpu.setActiveBuffer(0)
 gpu.setResolution(gpu.maxResolution())
