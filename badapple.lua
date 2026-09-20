@@ -1,7 +1,8 @@
 -- badapple - проигрыватель роликов BAPL для DwOS. Внутри Bad
 -- Apple!!: 4379 кадров 130x98 точек, три с половиной минуты, 1.3 МБ.
 --
---   badapple [файл.bin] [--loop] [--from=1:30] [--free]
+--   badapple [файл.bin] [--loop] [--from=1:30] [--free] [--mute]
+--   badapple --writetape=badapple.dfpwm    - записать звук на кассету
 --
 -- Почему это вообще идёт на игровой машине. Экран OC - символы, а не
 -- точки: нижний полублок U+2584 делит ячейку пополам, и при двух цветах
@@ -20,8 +21,24 @@
 -- Перемотка идёт по ключевым кадрам: их смещения лежат в заголовке, файл
 -- перематывается seek-ом, и от ключевого кадра доигрывается остаток.
 --
+-- Звук в ролике не лежит и лежать не может: кадр стоит пару сотен байт, а
+-- секунда звука - четыре тысячи. Его крутит кассетник Computronics
+-- (tape_drive): кассета пишется один раз (--writetape, файл к ней готовит
+-- tools/packdfpwm.py из mp3 или того же mp4), дальше блок играет её сам, ни
+-- байта не спрашивая у машины. Плееру остаётся держать ленту там же, где
+-- идёт картинка - при запуске, паузе, перемотке и раз в секунду на сверку.
+--
+-- Слышно при этом не то место, где лента сейчас: клиент копит буфер
+-- (audioPreloadMs, по умолчанию 750 мс) и только потом начинает играть.
+-- Отсюда две поправки на один и тот же --sync. Ленту пустили - буфер пуст,
+-- играть начнут ровно с того места, куда её поставили, но через sync
+-- секунд: значит лента встаёт точно на кадр, а картинка ждёт звук. Лента
+-- уже идёт - буфер полон, слышно то, что прочитано sync назад: значит при
+-- перемотке лента встаёт на sync впереди кадра, и картинка не ждёт ничего.
+-- Не сошлось на глаз - подстрой на ходу клавишами [ и ].
+--
 -- Управление: пробел - пауза, стрелки - перемотка на 5 секунд, R - сначала,
--- Q - выход.
+-- M - звук, [ и ] - подстройка звука, - и = - громкость, Q - выход.
 --
 -- --free гонит кадры без оглядки на часы - так видно, сколько их машина
 -- вытягивает на самом деле; обычно же плеер держит те 20 к/с, под которые
@@ -47,6 +64,11 @@ local gpu = component.gpu
 
 local floor, rep, uptime = math.floor, string.rep, computer.uptime
 local BLOCK = "\226\150\132"   -- U+2584, нижний полублок
+
+local function mmss(sec)
+	sec = floor(sec)
+	return ("%d:%02d"):format(floor(sec / 60), sec % 60)
+end
 
 ------------------------------------------------------------------ файл
 
@@ -74,6 +96,135 @@ local function find(name)
 	return f, name
 end
 
+--- read даёт не больше maxReadBuffer за раз (в конфиге сервера это 2 КБ),
+--- поэтому добираем нужное в цикле.
+local function readn(f, n)
+	local parts, got = {}, 0
+	while got < n do
+		local c = f:read(n - got)
+		if not c or #c == 0 then break end
+		parts[#parts + 1] = c
+		got = got + #c
+	end
+	return table.concat(parts)
+end
+
+------------------------------------------------------------------ звук
+
+-- Кассетник держит DFPWM: один бит на отсчёт, 32768 отсчётов в секунду -
+-- ровно 4096 байт на секунду звука. В бюджет машины он не лезет вовсе, но
+-- вызовы к нему разные: даровые (прямые) у него только getPosition, getSize
+-- и isReady, а seek, play и stop стоят тика, то есть кадра. Отсюда и
+-- обращение с лентой: трогаем её на паузе, перемотке и раз в секунду на
+-- сверку, а не каждый кадр.
+local TAPE_BPS = 4096
+
+local tape, emptyDrive
+for addr in component.list("tape_drive") do
+	local t = component.proxy(addr)
+	local ok, ready = pcall(t.isReady)
+	if ok and ready then tape = t break end
+	emptyDrive = true
+end
+
+local snd = {
+	on = tape ~= nil and not opt.mute,
+	vol = math.min(1, math.max(0, tonumber(opt.volume) or 1)),
+	sync = tonumber(opt.sync) or 0.75,
+	size = 0,
+}
+if tape then
+	local ok, sz = pcall(tape.getSize)
+	snd.size = ok and sz or 0
+end
+
+--- Лента на такую-то секунду звука.
+local function tapeTo(sec)
+	local want = floor(sec * TAPE_BPS)
+	if want < 0 then want = 0 elseif want > snd.size then want = snd.size end
+	local ok, pos = pcall(tape.getPosition)
+	if ok and want ~= pos then pcall(tape.seek, want - pos) end
+end
+
+--- Идущую ленту - на sync впереди кадра: слышно то, что прочитано буфер
+--- назад.
+local function sndSeek(sec)
+	if snd.on then tapeTo(sec + snd.sync) end
+end
+
+--- Пустить остановленную ленту с этого кадра. Играть с него начнут через
+--- sync секунд - столько набирается буфер, - поэтому ровно столько ждёт и
+--- картинка; сколько ждать, узнаёт вызвавший.
+local function sndPlay(sec)
+	if not snd.on then return 0 end
+	tapeTo(sec)
+	pcall(tape.play)
+	return snd.sync > 0 and snd.sync or 0
+end
+
+local function sndStop()
+	if tape then pcall(tape.stop) end
+end
+
+--- Сверка. Само сравнение бесплатное, поправка стоит тика и слышна
+--- щелчком, поэтому порог не мелкий: разойтись они могут только если
+--- машина или мир подвисли. Доигранную до конца ленту не трогаем - иначе
+--- она будет дёргаться раз в секунду до конца ролика.
+local function sndCheck(sec)
+	if not snd.on then return end
+	local ok, pos = pcall(tape.getPosition)
+	if not ok or pos >= snd.size then return end
+	local d = pos / TAPE_BPS - snd.sync - sec
+	if d > 0.25 or d < -0.25 then sndSeek(sec) end
+end
+
+--- Запись кассеты - дело разовое: дальше она помнит звук сама. Пишем
+--- большими кусками, потому что тика стоит каждый write, а не каждый байт:
+--- на 877 КБ разница между двумя килобайтами за вызов и восемью - это
+--- полминуты ожидания.
+local function writetape(name)
+	if not tape then
+		io.stderr:write(emptyDrive and "в кассетнике нет кассеты\n"
+			or "кассетника не видно - поставь tape drive рядом с компьютером\n")
+		os.exit(1)
+	end
+	local f, p = find(name)
+	if not f then
+		io.stderr:write("не найден " .. name .. "\n")
+		io.stderr:write("сделать из mp3 или mp4: python tools/packdfpwm.py звук.mp3 -o badapple.dfpwm\n")
+		os.exit(1)
+	end
+	local len = f:seek("end") or 0
+	f:seek("set", 0)
+	print(("%s: %d КБ, %s звука"):format(p, floor(len / 1024), mmss(len / TAPE_BPS)))
+	print(("кассета: %d КБ, %s"):format(floor(snd.size / 1024), mmss(snd.size / TAPE_BPS)))
+	if len > snd.size then print("кассета короче - запишу, сколько влезет") end
+	pcall(tape.stop)
+	pcall(tape.seek, -tape.getPosition())
+	local done = 0
+	while done < len do
+		local chunk = readn(f, 8192)
+		if #chunk == 0 then break end
+		local before = tape.getPosition()
+		tape.write(chunk)
+		local wrote = tape.getPosition() - before
+		done = done + wrote
+		io.write(("\rзаписано %3d%%"):format(floor(done / len * 100)))
+		if wrote < #chunk then break end            -- лента кончилась
+	end
+	f:close()
+	pcall(tape.setLabel, "Bad Apple!!")
+	pcall(tape.seek, -tape.getPosition())
+	print(("\rзаписано %d КБ - %s звука"):format(floor(done / 1024), mmss(done / TAPE_BPS)))
+end
+
+if opt.writetape then
+	writetape(opt.writetape == true and "badapple.dfpwm" or tostring(opt.writetape))
+	os.exit(0)
+end
+
+------------------------------------------------------------------ ролик
+
 local NAME = rest[1] or "badapple.bin"
 local fh, path = find(NAME)
 if not fh then
@@ -82,25 +233,12 @@ if not fh then
 	os.exit(1)
 end
 
---- read даёт не больше maxReadBuffer за раз (в конфиге сервера это 2 КБ),
---- поэтому добираем нужное в цикле.
-local function readn(n)
-	local parts, got = {}, 0
-	while got < n do
-		local c = fh:read(n - got)
-		if not c or #c == 0 then break end
-		parts[#parts + 1] = c
-		got = got + #c
-	end
-	return table.concat(parts)
-end
-
 local function u16(s, i) return s:byte(i) + s:byte(i + 1) * 256 end
 local function u32(s, i)
 	return s:byte(i) + s:byte(i + 1) * 256 + s:byte(i + 2) * 65536 + s:byte(i + 3) * 16777216
 end
 
-local head = readn(16)
+local head = readn(fh, 16)
 if #head < 16 or head:sub(1, 4) ~= "BAPL" or head:byte(5) ~= 1 then
 	io.stderr:write(path .. " - это не ролик BAPL первой версии\n")
 	os.exit(1)
@@ -115,7 +253,7 @@ local NSTATES     = COLORS * COLORS
 
 local pal = {}
 do
-	local rgb = readn(COLORS * 3)
+	local rgb = readn(fh, COLORS * 3)
 	for i = 0, COLORS - 1 do
 		pal[i] = rgb:byte(i * 3 + 1) * 65536 + rgb:byte(i * 3 + 2) * 256 + rgb:byte(i * 3 + 3)
 	end
@@ -123,12 +261,12 @@ end
 
 local KEYINT, NKEYS
 do
-	local t = readn(6)
+	local t = readn(fh, 6)
 	KEYINT, NKEYS = u16(t, 1), u32(t, 3)
 end
 local KEYS = {}
 do
-	local t = readn(NKEYS * 4)
+	local t = readn(fh, NKEYS * 4)
 	for i = 1, NKEYS do KEYS[i] = u32(t, (i - 1) * 4 + 1) end
 end
 
@@ -276,11 +414,6 @@ local running = true
 local dropped = 0
 local shownFps = 0
 
-local function mmss(sec)
-	sec = floor(sec)
-	return ("%d:%02d"):format(floor(sec / 60), sec % 60)
-end
-
 local barText, barAt
 local function drawBar()
 	-- строка состояния живёт своей жизнью: собирать её каждый кадр -
@@ -290,10 +423,18 @@ local function drawBar()
 	barAt = at
 	local n = 30
 	local full = floor(cur / NFRAMES * n + 0.5)
-	local s = ("%s %s / %s  [%s%s]  %.0f к/с%s   пробел - пауза, стрелки - перемотка, R - сначала, Q - выход")
+	-- про звук в строке - только то, чего не слышно: включён ли он вообще
+	-- и на сколько лента уведена от кадра
+	local sound = ""
+	if snd.on then sound = ("  лента %+.2f"):format(snd.sync)
+	elseif tape then sound = "  звук выкл"
+	elseif emptyDrive then sound = "  нет кассеты"
+	end
+	local s = ("%s %s / %s  [%s%s]  %.0f к/с%s%s   пробел - пауза, стрелки - перемотка, R - сначала%s, Q - выход")
 		:format(paused and "||" or ">", mmss(cur / FPS), mmss(NFRAMES / FPS),
 			rep("#", full), rep("-", n - full), shownFps,
-			dropped > 0 and ("  пропущено %d"):format(dropped) or "")
+			dropped > 0 and ("  пропущено %d"):format(dropped) or "", sound,
+			tape and ", M - звук" or "")
 	if s == barText then return end
 	barText = s
 	local len = unicode.len(s)
@@ -328,14 +469,36 @@ local function pump(timeout)
 end
 
 local jump          -- насколько перемотать, решает главный цикл
+local resumed       -- с паузы сняли: ленту пускает тоже главный цикл
 local function takeKeys()
 	while #pending > 0 do
 		local c = table.remove(pending, 1)
 		if c == 16 or c == 1 then running = false                 -- Q, Esc
-		elseif c == 57 then paused = not paused barAt = nil       -- пробел
+		elseif c == 57 then                                       -- пробел
+			paused = not paused
+			barAt = nil
+			if paused then sndStop() else resumed = true end
 		elseif c == 203 then jump = -5                            -- влево
 		elseif c == 205 then jump = 5                             -- вправо
 		elseif c == 19 then jump = -1e9                           -- R
+		elseif c == 50 then                                       -- M
+			if snd.on then
+				snd.on = false
+				sndStop()
+			elseif tape then
+				snd.on = true
+				pcall(tape.setVolume, snd.vol)
+				resumed = not paused
+			end
+			barAt = nil
+		elseif (c == 26 or c == 27) and snd.on then               -- [ и ]
+			snd.sync = math.min(3, math.max(0, snd.sync + (c == 26 and -0.05 or 0.05)))
+			if not paused then sndSeek(cur / FPS) end
+			barAt = nil
+		elseif (c == 12 or c == 13) and tape then                 -- - и =
+			snd.vol = math.min(1, math.max(0, snd.vol + (c == 12 and -0.1 or 0.1)))
+			pcall(tape.setVolume, snd.vol)
+			barAt = nil
 		end
 	end
 end
@@ -354,17 +517,29 @@ local ok, err = pcall(function()
 		cur = seek(floor(sec * FPS))
 	end
 
-	local base = uptime() - cur / FPS     -- время, от которого идёт отсчёт
+	if snd.on then pcall(tape.setVolume, snd.vol) end
+
+	-- время, от которого идёт отсчёт: сдвинуто на то, сколько картинка
+	-- ждёт звук (без звука - ноль, и отсчёт идёт от сейчас)
+	local base = uptime() + sndPlay(cur / FPS) - cur / FPS
 	local fpsT, fpsN = uptime(), 0
+	local sndT = uptime()
 
 	while running do
 		takeKeys()
+		if resumed then
+			base = uptime() + sndPlay(cur / FPS) - cur / FPS
+			sndT = uptime()
+			resumed = nil
+		end
 		if jump then
 			cur = seek(jump <= -1e9 and 0 or (cur + floor(jump * FPS)))
 			jump = nil
 			base = uptime() - cur / FPS
 			dropped, skips = 0, 0
 			barAt = nil
+			-- на паузе лента стоит: её поставит на место снятие с паузы
+			if not paused then sndSeek(cur / FPS) sndT = uptime() end
 			present()          -- на паузе кадр иначе не сменится
 		end
 
@@ -374,7 +549,12 @@ local ok, err = pcall(function()
 			base = uptime() - cur / FPS
 		else
 			if cur >= NFRAMES then
-				if opt.loop then cur = seek(0) base = uptime() else running = false end
+				if opt.loop then
+					cur = seek(0)
+					sndStop()
+					base = uptime() + sndPlay(0)
+					sndT = uptime()
+				else running = false end
 			else
 				drawFrame()
 				cur = cur + 1
@@ -400,6 +580,7 @@ local ok, err = pcall(function()
 						barAt = nil
 					end
 				end
+				if now - sndT >= 1 then sndT = now sndCheck(cur / FPS) end
 				drawBar()
 				local wait = FREE and 0 or (due - uptime())
 				pump(wait > 0 and wait or 0.001)
@@ -411,6 +592,7 @@ end)
 ------------------------------------------------------------------ уборка
 
 event.ignore("key_down", handleKey)
+sndStop()
 scr:close()
 gfx.restorePalette(gpu, saved)
 gpu.setResolution(gpu.maxResolution())

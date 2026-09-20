@@ -16,10 +16,13 @@
 		{ "keytest.lua",     "keytest.lua",    size = 1924, crc = "814b00b7" },
 		-- сам установщик: им же и обновляются (games-update)
 		{ "install.lua",     "install.lua",    size = 18734, crc = "8fe7197f" },
-		{ "badapple.lua",    "badapple.lua",   size = 17323, crc = "6f0a0ad9" },
+		{ "badapple.lua",    "badapple.lua",   size = 26205, crc = "992f1773" },
 		-- ролик к плееру: 1.3 МБ, в репозитории его может и не быть -
 		-- тогда установщик просто скажет, что не нашёл, и пойдёт дальше
 		{ "badapple.bin",    "badapple.bin",   size = 1318092, crc = "c62419b9", opt = true },
+		-- и звук к нему: его пишут на кассету (badapple --writetape),
+		-- собирается он tools/packdfpwm.py и тоже не обязателен
+		{ "badapple.dfpwm",  "badapple.dfpwm", size = 898969, crc = "e55e07d5", opt = true },
 	},
 	-- имя ярлыка -> что он запускает
 	bin = {
