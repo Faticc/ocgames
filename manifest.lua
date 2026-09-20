@@ -14,6 +14,7 @@
 		{ "kartart.lua",     "kartart.lua",    size = 21440, crc = "e4300472" },
 		{ "kart.lua",        "kart.lua",       size = 71757, crc = "b302902b" },
 		{ "keytest.lua",     "keytest.lua",    size = 1924, crc = "814b00b7" },
+		{ "tapetest.lua",    "tapetest.lua",   size = 6729, crc = "16a34da2" },
 		-- сам установщик: им же и обновляются (games-update)
 		{ "install.lua",     "install.lua",    size = 18734, crc = "8fe7197f" },
 		{ "badapple.lua",    "badapple.lua",   size = 26205, crc = "992f1773" },
