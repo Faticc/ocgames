@@ -104,7 +104,40 @@ wget -f https://raw.githubusercontent.com/Faticc/ocgames/main/install.lua /tmp/g
 wget -f <ссылка> /tmp/g.lua && /tmp/g.lua
 ```
 
-Обе установки кладут игры в `/home/games` (меняется через `--to=`) и делают
+### Что и куда
+
+Установщик из репозитория сначала показывает список — окно из установщика
+DwOS: каждая игра, каждый ролик и звук к нему отмечаются по отдельности, и
+у каждой строки свой диск.
+
+```
+  Игры
+  [x] Марио - платформер, восемь уровней        78 КБ  ◂ системный /   ▸
+  [ ] CHIP-8 - эмулятор приставки               14 КБ
+  Ролики - в папку videos диска
+  [x] Bad Apple!!                        3:39  1.3 МБ  ◂ Data /mnt/3fa ▸
+  [ ] Bad Apple!! - звук для кассеты           878 КБ
+  запишется — Data /mnt/3fa: 1.3 МБ из 3.8 МБ
+```
+
+Пробел — отметить, стрелки влево-вправо — диск этой строки, Tab — этот же
+диск всем отмеченным, Enter — ставить, Q — отмена (ничего не трогается).
+Игры ложатся в папку `games` выбранного диска, ролики — в `videos`; на
+системном диске это `/home/games` и `/home/videos`. Внизу видно, сколько
+куда запишется; не влезает — Enter не пускает дальше.
+
+При обновлении стоящее уже отмечено и стоит на своём диске: снял отметку —
+удалится, сменил диск — переедет. То, что предлагали и не взяли, в
+следующий раз само не отметится, а новое в репозитории помечено «новое».
+По умолчанию игры отмечены, ролики — нет: они тяжёлые.
+
+Без окна (скрипт или DwOS старше этого списка): `--yes` — взять то, что
+отмечено по умолчанию, `--all` — всё вместе с роликами, `--only=mario,doom,
+badapple` — только названное, `--disk=` — адрес или путь диска для нового,
+`--text` — тот же список текстом.
+
+Одним файлом (`GAMES.lua`) списка нет: он кладёт все игры в `/home/games`
+(меняется через `--to=`). Обе установки делают
 ярлыки `/bin/mario.lua`, `/bin/doom.lua`, `/bin/kart.lua`, `/bin/chip8.lua`,
 `/bin/video.lua` и `/bin/casino.lua`, так что дальше хватает `mario`,
 `doom`, `kart`, `chip8`, `video` и `casino` (`badapple` по старой памяти
@@ -114,8 +147,9 @@ wget -f <ссылка> /tmp/g.lua && /tmp/g.lua
 ### Обновление
 
 После установки из репозитория есть команда `games-update`: тот же
-установщик, положенный в `/home/games`, который помнит, откуда ставил.
-Качает он только то, что изменилось:
+установщик, положенный в `/home/games`, который помнит, откуда ставил и
+что куда положил. Он снова показывает список, а качает только то, что
+изменилось:
 
 * в `manifest.lua` у каждого файла записаны размер и CRC32, а в
   `/home/games/.installed` — что стоит у тебя. Совпало — файл не трогается,
@@ -135,18 +169,21 @@ wget -f <ссылка> /tmp/g.lua && /tmp/g.lua
 хэши. Забыл — установщик увидит, что пришло не то, что обещано, и ставить
 откажется; `lua test/insthar.lua` это тоже поймает.
 
-Ролик `badapple.bin` установщик из репозитория тянет сам (потоком в файл,
-не в память), а если его там нет — молча пропускает. В `GAMES.lua` он не
-кладётся: полтора мегабайта внутри Lua-файла раздулись бы вчетверо, и такое
-машина уже не прочла бы. Отдельно он ставится как угодно:
+Ролики лежат в репозитории в папке `video/` и в манифесте — в разделе
+`videos`: туда же кладётся новый ролик (`tools/packvideo.py` делает `.bin`
+и `.dfpwm`), строчка в манифест и `python tools/genmanifest.py` — он
+проставит размер, хэш и длину. Качает их установщик потоком в файл, не в
+память. В `GAMES.lua` роликов нет: полтора мегабайта внутри Lua-файла
+раздулись бы вчетверо, и такое машина уже не прочла бы. Руками ролик
+ставится как угодно:
 
 ```
-wget -f <ссылка> /home/games/badapple.bin
+wget -f <ссылка> /home/videos/badapple.bin
 ```
 
-Свои ролики кладутся туда же или в `/home/videos`, или в папку `videos`
-на любом диске — меню `video` найдёт их само. Звук к ролику — файл с тем же
-именем и расширением `.dfpwm` рядом.
+Меню `video` ищет ролики рядом с собой, в `/home/videos`, `/home/games`,
+`/home` и в корне и папке `videos` каждого диска из `/mnt`. Звук к ролику —
+файл с тем же именем и расширением `.dfpwm` рядом.
 
 ## Железо
 
@@ -463,8 +500,8 @@ mario --keys
 | `chip8roms.lua` | встроенные ROM, собранные из `roms/*.asm` |
 | `roms/breaker.asm` | «Отбивалка» на ассемблере CHIP-8 |
 | `video.lua` | проигрыватель роликов BAPL: меню, цвет, звук с кассеты |
-| `badapple.bin` | Bad Apple!!, упакованный под экран OC |
-| `badapple.dfpwm` | звук к нему: DFPWM для кассеты, 877 КБ |
+| `video/*.bin` | ролики: Bad Apple!! и свои, упакованные под экран OC |
+| `video/*.dfpwm` | звук к ним: DFPWM для кассеты |
 | `manifest.lua` | что куда ставится |
 | `install.lua` | установщик из репозитория |
 | `keytest.lua` | проверка клавиатуры |
@@ -500,7 +537,7 @@ Bad Apple — 6584 кадра 480×360. В лоб это 10 МБ даже одн
 Перепаковать из своего видео:
 
 ```bash
-python tools/packbadapple.py badapple.mp4 -o games/badapple.bin --verify
+python tools/packbadapple.py badapple.mp4 -o games/video/badapple.bin --verify
 python tools/packbadapple.py кадры/ -o games/my.bin --fps=15 --size=130x98
 ```
 
@@ -568,13 +605,13 @@ python tools/packvideo.py клип.mp4 --preview=100        # кадр 100 та�
 `tools/packdfpwm.py` сам, а ffmpeg только приводит звук к 32768 Гц моно:
 
 ```bash
-python tools/packdfpwm.py badapple.mp4 -o games/badapple.dfpwm --gain
+python tools/packdfpwm.py badapple.mp4 -o games/video/badapple.dfpwm --gain
 ```
 
 Послушать, что получилось, можно не заходя в игру:
 
 ```bash
-python tools/packdfpwm.py --decode games/badapple.dfpwm -o проба.wav
+python tools/packdfpwm.py --decode games/video/badapple.dfpwm -o проба.wav
 ```
 
 `--decode` разжимает кассетный файл обратно **тем же кодеком, каким его
@@ -584,7 +621,7 @@ python tools/packdfpwm.py --decode games/badapple.dfpwm -o проба.wav
 собран не тем кодеком (см. про 1a выше).
 
 Bad Apple!! (3:39) — это 877 КБ, влезает в четырёхминутную кассету
-(в ней 960 КБ). Готовый `games/badapple.dfpwm` уже лежит в репозитории —
+(в ней 960 КБ). Готовый `games/video/badapple.dfpwm` уже лежит в репозитории —
 собран этим же скриптом из того самого видео, из которого упакован ролик,
 так что звук с картинкой сходится кадр в кадр.
 `--gain` поднимает тихую запись до пика, `--start=` и `--length=` берут
@@ -766,7 +803,7 @@ python tools/renderscreen.py out/m-end.json out/m-end.png
 иначе он будет честно считать, что не успевает, и пропускать вывод:
 
 ```bash
-lua test/gamehar.lua games/video.lua out/ba.json "wait:200,shot:a" games/badapple.bin --free
+lua test/gamehar.lua games/video.lua out/ba.json "wait:200,shot:a" games/video/badapple.bin --free
 python tools/renderscreen.py out/ba-a.json out/ba-a.png
 ```
 
@@ -776,7 +813,7 @@ python tools/renderscreen.py out/ba-a.json out/ba-a.png
 
 ```bash
 TAPE=4 lua test/gamehar.lua games/video.lua out/ba.json \
-    "wait:40,tap:space,wait:10,tap:space,wait:40" games/badapple.bin
+    "wait:40,tap:space,wait:10,tap:space,wait:40" games/video/badapple.bin
 ```
 
 Doom гоняется так же, только клавиши другие:

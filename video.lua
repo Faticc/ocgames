@@ -5,8 +5,9 @@
 --   video клип.bin [--loop] [--from=1:30] [--free] [--mute] [--sync=0.75]
 --   video --writetape=клип.dfpwm       - записать звук на кассету
 --
--- Ролики ищутся рядом с плеером, в /home/videos, /home и в корне и папке
--- videos каждого диска из /mnt. Делает их tools/packvideo.py из любого
+-- Ролики ищутся рядом с плеером, в /home/videos, /home/games, /home и в
+-- корне и папке videos каждого диска из /mnt - туда их кладёт установщик
+-- (games-update), каждый на тот диск, что выбрали. Делает их tools/packvideo.py из любого
 -- mp4, рядом кладёт .dfpwm для кассеты.
 --
 -- Два формата. Первый - Bad Apple!! (tools/packbadapple.py): до восьми
@@ -710,6 +711,7 @@ local function scan()
 	end
 	add(selfdir())
 	add("/home/videos")
+	add("/home/games")     -- туда ролик ставили прежние установщики
 	add("/home")
 	if ok and fs.list then
 		local okm, it = pcall(fs.list, "/mnt")
