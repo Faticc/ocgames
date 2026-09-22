@@ -16,12 +16,13 @@
 		{ "keytest.lua",     "keytest.lua",    size = 1924, crc = "814b00b7" },
 		{ "tapetest.lua",    "tapetest.lua",   size = 6729, crc = "16a34da2" },
 		-- сам установщик: им же и обновляются (games-update)
-		{ "install.lua",     "install.lua",    size = 18734, crc = "8fe7197f" },
-		{ "badapple.lua",    "badapple.lua",   size = 26205, crc = "992f1773" },
+		{ "install.lua",     "install.lua",    size = 18745, crc = "be317e30" },
+		-- проигрыватель роликов: меню, цвет, звук с кассеты
+		{ "video.lua",       "video.lua",      size = 31137, crc = "3f4aeb02" },
 		-- ролик к плееру: 1.3 МБ, в репозитории его может и не быть -
 		-- тогда установщик просто скажет, что не нашёл, и пойдёт дальше
 		{ "badapple.bin",    "badapple.bin",   size = 1318092, crc = "c62419b9", opt = true },
-		-- и звук к нему: его пишут на кассету (badapple --writetape),
+		-- и звук к нему: его пишут на кассету (W в меню video или video --writetape),
 		-- собирается он tools/packdfpwm.py и тоже не обязателен
 		{ "badapple.dfpwm",  "badapple.dfpwm", size = 898969, crc = "e55e07d5", opt = true },
 	},
@@ -30,7 +31,9 @@
 		{ "mario", "mario.lua" },
 		{ "doom", "doom.lua" },
 		{ "chip8", "chip8.lua" },
-		{ "badapple", "badapple.lua" },
+		{ "video", "video.lua" },
+		-- прежнее имя: открывает то же меню
+		{ "badapple", "video.lua" },
 		{ "casino", "casino.lua" },
 		{ "kart", "kart.lua" },
 		{ "games-update", "install.lua" },

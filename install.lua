@@ -196,7 +196,7 @@ do
 end
 
 --- Открыть поток и дождаться кода ответа. 404 отличаем от обрыва связи:
---- необязательные файлы (ролик к badapple) на него не жалуются.
+--- необязательные файлы (ролики к video) на него не жалуются.
 local function open(path)
 	local url = ("https://raw.githubusercontent.com/%s/%s/%s%s"):format(REPO, REF, SUB, path)
 	local ok, h = pcall(internet.request, url, nil, { ["user-agent"] = "ocgames" })
@@ -442,5 +442,5 @@ end
 print("  mario        - платформер: стрелки, вверх - прыжок, X - бег и огонь")
 print("  doom         - шутер: стрелки, A/D - вбок, пробел - огонь, E - открыть")
 print("  chip8        - эмулятор CHIP-8: 1234/QWER/ASDF/ZXCV, Q - выход")
-print("  badapple     - ролик: пробел - пауза, стрелки - перемотка, Q - выход")
+print("  video        - ролики: меню, пробел - пауза, стрелки - перемотка, Q - назад")
 print("  games-update - обновить игры")
