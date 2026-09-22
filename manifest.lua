@@ -46,6 +46,8 @@
 	videos = {
 		{ "video/poop.bin",  "poop.bin",       size = 2005958, crc = "53c0034f", secs = 41 },
 		{ "video/poop.dfpwm", "poop.dfpwm",     size = 167731, crc = "d3b7d404" },
+		{ "video/chinenumberone.bin", "chinenumberone.bin", size = 3811336, crc = "898bd8b2", secs = 119 },
+		{ "video/chinenumberone.dfpwm", "chinenumberone.dfpwm", size = 485649, crc = "c121119e" },
 	},
 	-- имя ярлыка -> что он запускает
 	bin = {
