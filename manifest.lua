@@ -30,13 +30,13 @@
 		{ "keytest.lua",     "keytest.lua",    size = 1924, crc = "814b00b7", pkg = "tools" },
 		{ "tapetest.lua",    "tapetest.lua",   size = 6729, crc = "16a34da2", pkg = "tools" },
 		-- сам установщик: им же и обновляются (games-update)
-		{ "install.lua",     "install.lua",    size = 29212, crc = "d5014a9a", pkg = "core" },
+		{ "install.lua",     "install.lua",    size = 30706, crc = "abfb06b6", pkg = "core" },
 		-- проигрыватель роликов: меню, цвет, звук с кассеты
 		{ "video.lua",       "video.lua",      size = 31376, crc = "51abbae1", pkg = "video" },
 		-- Bad Apple лежит и здесь ради установщиков старше списка: они
 		-- знают только files и удалили бы ролик, которого тут не нашли.
 		-- Новый установщик берёт файлы с video = true как ролики.
-		{ "video/badapple.bin", "badapple.bin",   size = 1318092, crc = "c62419b9", video = true, title = "Bad Apple!!", opt = true, secs = 219 },
+		{ "video/badapple.bin", "badapple.bin",   size = 1318092, crc = "c62419b9", video = true, title = "Bad Apple!!", opt = true, secs = 219, gz = "video/badapple.bin.gz", gzsize = 819737 },
 		{ "video/badapple.dfpwm", "badapple.dfpwm", size = 898969, crc = "e55e07d5", video = true, opt = true },
 	},
 	-- Ролики к video, каждый - отдельной строкой списка: можно взять ролик
@@ -44,10 +44,10 @@
 	-- диска (на системном - в /home/videos), там их и ищет плеер. Звук -
 	-- файл с тем же именем, .dfpwm: его пишут на кассету (W в меню video).
 	videos = {
-		{ "video/poop.bin",  "poop.bin",       size = 2005958, crc = "53c0034f", secs = 41 },
-		{ "video/poop.dfpwm", "poop.dfpwm",     size = 167731, crc = "d3b7d404" },
-		{ "video/chinenumberone.bin", "chinenumberone.bin", size = 3811336, crc = "898bd8b2", secs = 119 },
-		{ "video/chinenumberone.dfpwm", "chinenumberone.dfpwm", size = 485649, crc = "c121119e" },
+		{ "video/poop.bin",  "poop.bin",       size = 2005958, crc = "53c0034f", opt = true, secs = 41, gz = "video/poop.bin.gz", gzsize = 1384171 },
+		{ "video/poop.dfpwm", "poop.dfpwm",     size = 167731, crc = "d3b7d404", opt = true, gz = "video/poop.dfpwm.gz", gzsize = 95984 },
+		{ "video/chinenumberone.bin", "chinenumberone.bin",size = 3811336, crc = "898bd8b2", opt = true, secs = 119, gz = "video/chinenumberone.bin.gz", gzsize = 2614750 },
+		{ "video/chinenumberone.dfpwm", "chinenumberone.dfpwm",size = 485649, crc = "c121119e", opt = true, gz = "video/chinenumberone.dfpwm.gz", gzsize = 395120 },
 	},
 	-- имя ярлыка -> что он запускает
 	bin = {

@@ -240,21 +240,50 @@ local function mkdir(path)
 	if dir and dir ~= "" and not fs.exists(dir) then fs.makeDirectory(dir) end
 end
 
+-- Ролики лежат в репозитории сжатыми (gz у записи манифеста): GitHub
+-- двоичное сам не сжимает, а интернет-карта платит тиком за каждые 2 КБ.
+-- Распаковывает inflate из DwOS; под OpenOS его нет - тогда тот же файл
+-- берётся из репозитория DwOS, в память.
+local inflate
+local function getInflate()
+	if inflate ~= nil then return inflate end
+	inflate = false
+	local ok, m = pcall(require, "inflate")
+	if ok and type(m) == "table" then inflate = m return inflate end
+	local rok, h = pcall(internet.request,
+		"https://raw.githubusercontent.com/Faticc/dwos/main/dist/lib/inflate.lua", nil, { ["user-agent"] = "ocgames" })
+	if rok and h then
+		local parts = {}
+		pcall(function() for chunk in h do parts[#parts + 1] = chunk end end)
+		pcall(h.close)
+		local chunk = load(table.concat(parts), "=inflate", "t", _G)
+		local cok, lib = pcall(chunk or error)
+		if cok and type(lib) == "table" then inflate = lib end
+	end
+	return inflate
+end
+
 --- Скачать прямо в файл, не собирая его в памяти (ролик весит больше
---- мегабайта), и заодно посчитать хэш. Возвращает размер и хэш.
-local function download(path, to)
+--- мегабайта), и заодно посчитать хэш. gz - путь сжатого файла: тогда
+--- поток распаковывается на лету. Возвращает размер и хэш.
+local function download(path, to, gz)
 	local h, why, code = open(path)
 	if not h then return nil, why, code end
 	mkdir(to)
 	local f, werr = io.open(to, "wb")
 	if not f then pcall(h.close) return nil, tostring(werr) end
 	local n, crc = 0, 0
+	local function put(chunk)
+		f:write(chunk)
+		n, crc = n + #chunk, crc32(crc, chunk)
+	end
 	local got, err = pcall(function()
+		local z = gz and getInflate().new(put, "gzip")
 		for chunk in h do
-			f:write(chunk)
-			n, crc = n + #chunk, crc32(crc, chunk)
+			if z then z:feed(chunk) else put(chunk) end
 			breathe()
 		end
+		if z and not z.done then error("сжатый поток оборвался", 0) end
 	end)
 	f:close()
 	pcall(h.close)
@@ -268,7 +297,8 @@ local function install(f, to)
 	local part = to .. ".part"
 	local lastErr
 	for try = 1, 2 do
-		local n, crc, code = download(f[1], part)
+		local gz = f.gz and getInflate() and true
+		local n, crc, code = download(gz and f.gz or f[1], part, gz)
 		if not n then
 			fs.remove(part)
 			if code == 404 then return nil, crc, 404 end
